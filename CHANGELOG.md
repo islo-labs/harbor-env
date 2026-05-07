@@ -4,11 +4,11 @@
 
 - Ports the docker-compose mode from upstream harbor PR harbor-framework/harbor#1559: multi-service tasks defined via `docker-compose.yaml` now run inside the Islo VM via Docker Compose, taking priority over Dockerfile and prebuilt-image paths.
 - `EnvironmentCapabilities(disable_internet=True)` is advertised when running in compose mode (the only mode that can currently honor `allow_internet=False`, via the shared `docker-compose-no-network.yaml` overlay).
-- New harbor imports the package now relies on:
-  - `harbor.environments.docker.{COMPOSE_BASE_PATH, COMPOSE_BUILD_PATH, COMPOSE_PREBUILT_PATH, COMPOSE_NO_NETWORK_PATH}` (public, available since harbor 0.3).
-  - `harbor.utils.env.resolve_env_vars` (public, available since harbor 0.3) — used to resolve `${VAR}` templates in `[environment.env]` for compose mode.
-  - `harbor.environments.docker.docker._sanitize_docker_image_name` (private, available since harbor 0.3) — load-bearing for matching upstream's image-name sanitization in compose mode; accepted-risk private import.
-- Harbor floor unchanged at `harbor>=0.6` — all new symbols predate the existing floor.
+- New harbor imports the package now relies on (both public, available since harbor 0.3):
+  - `harbor.environments.docker.{COMPOSE_BASE_PATH, COMPOSE_BUILD_PATH, COMPOSE_PREBUILT_PATH, COMPOSE_NO_NETWORK_PATH}`.
+  - `harbor.utils.env.resolve_env_vars` — resolves `${VAR}` templates in `[environment.env]` for compose mode.
+- `_sanitize_docker_image_name` is inlined from harbor (Apache-2.0) so the package has zero private-API dependencies.
+- Harbor floor unchanged at `harbor>=0.6`.
 
 ## 0.1.0 — Initial release
 

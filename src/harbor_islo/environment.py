@@ -23,7 +23,6 @@ from harbor.environments.docker import (
     COMPOSE_NO_NETWORK_PATH,
     COMPOSE_PREBUILT_PATH,
 )
-from harbor.environments.docker.docker import _sanitize_docker_image_name
 from harbor.models.trial.paths import EnvironmentPaths
 from harbor.utils.env import resolve_env_vars
 from islo import AsyncIslo
@@ -41,6 +40,19 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
+
+
+# Copied from harbor.environments.docker.docker._sanitize_docker_image_name
+# (Apache-2.0). Inlined to avoid depending on a private harbor symbol that
+# could be renamed without notice. Implements the OCI distribution spec name
+# rules: https://github.com/opencontainers/distribution-spec/blob/main/spec.md
+def _sanitize_docker_image_name(name: str) -> str:
+    """Sanitize a name to be a valid Docker image name."""
+    name = name.lower()
+    if not re.match(r"^[a-z0-9]", name):
+        name = "0" + name
+    name = re.sub(r"[^a-z0-9._-]", "-", name)
+    return name
 
 
 class GatewayRuleConfig(BaseModel):
