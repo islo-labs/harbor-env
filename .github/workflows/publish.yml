@@ -1,0 +1,48 @@
+name: Publish to PyPI
+
+# Triggers on git tags shaped like v0.1.0, v1.2.3-rc1, etc.
+# Build runs unconditionally; publish runs only after the `pypi`
+# GitHub Environment approves (required reviewer = rotemtam).
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.12'
+      - name: Verify tag matches pyproject version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver=$(grep -E '^version = ' pyproject.toml | head -1 | cut -d'"' -f2)
+          if [ "$tag" != "$ver" ]; then
+            echo "::error::Tag v$tag does not match pyproject version $ver"
+            exit 1
+          fi
+      - run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/harbor-islo
+    permissions:
+      id-token: write  # required for trusted publishing (OIDC)
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
