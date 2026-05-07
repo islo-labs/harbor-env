@@ -1,0 +1,4 @@
+services:
+  main:
+    image: ${MAIN_IMAGE_NAME}
+    working_dir: /app

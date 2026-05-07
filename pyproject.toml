@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "harbor-islo"
+version = "0.2.0"
+description = "Islo microVM sandbox plugin for the Harbor agent-evaluation framework."
+authors = [{ name = "Rotem Tamir", email = "r@honeybadge.co" }]
+license = "Apache-2.0"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "harbor>=0.6",
+    "islo",
+    "tenacity>=8",
+    "pydantic>=2",
+    "dockerfile-parse",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+    "ty",
+]
+
+[project.urls]
+Repository = "https://github.com/islo-labs/harbor-env"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/harbor_islo"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: live test against real Islo (requires ISLO_API_KEY)",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+extend-select = ["I"]
