@@ -35,6 +35,9 @@ packages = ["src/harbor_islo"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: live test against real Islo (requires ISLO_API_KEY)",
+]
 
 [tool.ruff]
 line-length = 88

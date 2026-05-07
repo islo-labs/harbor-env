@@ -26,4 +26,8 @@ jobs:
         run: ruff format --check .
 
       - name: Test
+        # ISLO_API_KEY is optional -- without it, integration tests are skipped
+        # via the pytest.mark.skipif gate in tests/integration/.
+        env:
+          ISLO_API_KEY: ${{ secrets.ISLO_API_KEY }}
         run: pytest tests/ -v
