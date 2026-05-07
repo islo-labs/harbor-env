@@ -20,17 +20,8 @@ Requires `harbor >= 0.6`.
 
 ## Quickstart
 
-Use a named gateway profile (recommended for production / shared policy):
-
-```yaml
-environment:
-  import_path: "harbor_islo:IsloEnvironment"
-  kwargs:
-    gateway_profile: "prod-apis"
-```
-
-Or define an inline single-policy gateway (legacy flat shape, useful for ad-hoc
-runs):
+Define an inline gateway policy in the task / job config (recommended — the
+policy lives next to the run that uses it, no out-of-band setup):
 
 ```yaml
 environment:
@@ -44,6 +35,16 @@ environment:
           provider_key: "openai"
         - host_pattern: "*.github.com"
           action: "allow"
+```
+
+Or reference a named gateway profile that's been pre-created in the Islo
+control plane (useful when many runs share the same policy):
+
+```yaml
+environment:
+  import_path: "harbor_islo:IsloEnvironment"
+  kwargs:
+    gateway_profile: "prod-apis"
 ```
 
 ## CLI
