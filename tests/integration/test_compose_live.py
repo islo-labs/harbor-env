@@ -1,9 +1,9 @@
 """Live integration test for IsloEnvironment compose mode.
 
-Spins up a real Islo sandbox, runs ``docker compose up`` against a minimal
-multi-file overlay (the user's compose merged with harbor's shared base /
-build / no-network templates), and verifies that ``env.exec`` lands inside
-the canonical ``main`` service.
+Spins up a real Islo sandbox, runs ``docker compose up`` against the
+fixture task in ``fixtures/compose-task/`` (the user's compose merged
+with harbor's shared base / build / no-network templates), and verifies
+that ``env.exec`` lands inside the canonical ``main`` service.
 
 The whole module is gated on ``ISLO_API_KEY``; without it the test is
 silently skipped, so this file is safe to leave checked in. CI sets the
@@ -11,6 +11,8 @@ secret as an env var on the pytest step (see .github/workflows/ci.yml).
 """
 
 import os
+import shutil
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -27,38 +29,18 @@ pytestmark = [
     pytest.mark.integration,
 ]
 
-
-# A minimal compose file shaped like what harbor tasks ship: declare a
-# ``main`` service that builds from the task environment dir. The shared
-# harbor templates (base / build / no-network / our CA overlay) are
-# merged on top at runtime by IsloEnvironment._start_compose.
-_COMPOSE_YAML = """\
-services:
-  main:
-    image: ${MAIN_IMAGE_NAME}
-    working_dir: /app
-"""
-
-# Small image with ``bash`` preinstalled. IsloEnvironment.exec() runs
-# commands as ``bash -lc <cmd>`` inside the main service, so the chosen
-# base must ship bash -- alpine:3.20 doesn't, debian-slim does.
-_DOCKERFILE = """\
-FROM debian:12-slim
-WORKDIR /app
-"""
+FIXTURE_TASK = Path(__file__).parent / "fixtures" / "compose-task"
 
 
 @pytest.mark.asyncio
 async def test_compose_mode_against_real_islo(tmp_path):
     """End-to-end: bring up a compose project on a real Islo VM and exec into it.
 
-    Budget: ~60-90s (sandbox provision + alpine pull + compose up + a couple
+    Budget: ~60-90s (sandbox provision + base-image pull + compose up + a couple
     of execs). Uses a uuid-suffixed session id so reruns don't collide.
     """
     env_dir = tmp_path / "environment"
-    env_dir.mkdir()
-    (env_dir / "docker-compose.yaml").write_text(_COMPOSE_YAML)
-    (env_dir / "Dockerfile").write_text(_DOCKERFILE)
+    shutil.copytree(FIXTURE_TASK, env_dir)
 
     trial_dir = tmp_path / "trial"
     trial_dir.mkdir()
@@ -93,8 +75,8 @@ async def test_compose_mode_against_real_islo(tmp_path):
             f"cat /etc/os-release failed: rc={os_release.return_code} "
             f"stderr={os_release.stderr!r}"
         )
-        # We pinned debian:12-slim; assert we landed in the main service
-        # (rather than, say, the islo-runner host VM).
+        # The fixture pins debian:12-slim; assert we landed in the main
+        # service (rather than, say, the islo-runner host VM).
         assert "Debian" in (os_release.stdout or ""), (
             f"unexpected /etc/os-release contents: {os_release.stdout!r}"
         )
