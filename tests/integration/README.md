@@ -2,7 +2,9 @@
 
 These tests exercise `harbor_islo.IsloEnvironment` against a **real Islo
 tenant**. They provision sandboxes, build images, and run compose stacks --
-each run takes ~60-90 seconds and consumes Islo VM time on your account.
+the end-to-end test (`test_compose_live.py`) drives the full Harbor
+`Trial` pipeline (Oracle agent + verifier + sandbox teardown) and takes
+roughly 3-5 minutes. Each run consumes Islo VM time on your account.
 
 ## Gating
 
