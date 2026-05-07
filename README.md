@@ -57,9 +57,9 @@ harbor run \
   --model anthropic/claude-opus-4-1
 ```
 
-Authenticate against the Islo control plane by setting `ISLO_API_KEY`
-(Descope access key or session JWT). Override the API endpoint with
-`ISLO_API_URL` if you're not pointed at production.
+Authenticate against the Islo control plane by setting `ISLO_API_KEY` to
+your Islo API key. Override the API endpoint with `ISLO_API_URL` if you're
+not pointed at production.
 
 ## Compatibility
 
