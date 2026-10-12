@@ -140,6 +140,8 @@ async def test_start_plain_creates_sandbox_and_waits(temp_dir, monkeypatch):
     sandboxes.create_sandbox.assert_awaited_once()
     call_kwargs = sandboxes.create_sandbox.await_args.kwargs
     assert call_kwargs["image"] == "docker.io/library/islo-runner:latest"
+    assert call_kwargs["init"] == {"type": "minimal"}
+    assert "init_capabilities" not in call_kwargs
 
 
 @pytest.mark.asyncio
@@ -263,7 +265,7 @@ async def test_start_with_dockerfile_builds_and_runs_docker(temp_dir, monkeypatc
 
     call_kwargs = sandboxes.create_sandbox.await_args.kwargs
     assert call_kwargs["image"] == "docker.io/library/islo-runner:latest"
-    assert "docker" in call_kwargs["init_capabilities"]
+    assert call_kwargs["init"] == {"type": "custom", "capabilities": ["docker"]}
 
     env._build_and_run_docker.assert_awaited_once()
     assert env._workdir == "/code"

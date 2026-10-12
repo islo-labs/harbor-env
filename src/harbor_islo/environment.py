@@ -258,12 +258,19 @@ class IsloEnvironment(BaseEnvironment):
         gateway_profile: str | None = None,
     ) -> None:
         client = self._client()
+        # The gateway proxy and core are part of platform init. Only Docker
+        # needs an explicit capability with the current SDK's intent API.
+        init = (
+            {"type": "custom", "capabilities": ["docker"]}
+            if init_capabilities and "docker" in init_capabilities
+            else {"type": "minimal"}
+        )
         sandbox = await client.sandboxes.create_sandbox(
             image=image,
             vcpus=self.task_env_config.cpus,
             memory_mb=self.task_env_config.memory_mb,
             disk_gb=self.task_env_config.storage_mb // 1024,
-            init_capabilities=init_capabilities,
+            init=init,
             gateway_profile=gateway_profile,
         )
         self._sandbox_name = sandbox.name
