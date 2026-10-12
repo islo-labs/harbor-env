@@ -17,9 +17,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: |
-          pip install -e ".[dev]"
-          pip install --no-deps "harbor @ git+https://github.com/islo-labs/harbor-fork.git@121de2153c4bcdadd901beebd68cae4611ed0198"
+        run: pip install -e ".[dev]"
 
       - name: Lint
         run: ruff check .

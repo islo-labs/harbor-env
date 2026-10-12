@@ -9,17 +9,8 @@ from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import EnvironmentPaths, TrialPaths
 
 from harbor_islo import IsloEnvironment
-from harbor_islo.environment import _upload_retry_wait
 
 _SERVER_NAME = "bright-otter-runs"
-
-
-def test_upload_retry_wait_uses_retry_after():
-    request = httpx.Request("POST", "https://compute.example/sandboxes/test/files")
-    response = httpx.Response(429, headers={"Retry-After": "23"}, request=request)
-    error = httpx.HTTPStatusError("rate limited", request=request, response=response)
-    state = SimpleNamespace(outcome=SimpleNamespace(exception=lambda: error))
-    assert _upload_retry_wait(state) == 23
 
 
 @pytest.mark.asyncio
@@ -42,7 +33,7 @@ async def test_sdk_upload_file_does_not_retry_bad_request(temp_dir, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_sdk_upload_file_retries_429_past_two_attempts(temp_dir, monkeypatch):
+async def test_sdk_upload_file_leaves_429_retries_to_sdk(temp_dir, monkeypatch):
     env = _make_env(temp_dir, monkeypatch)
     env._sandbox_name = _SERVER_NAME
     _stub_islo(env)
@@ -51,25 +42,31 @@ async def test_sdk_upload_file_retries_429_past_two_attempts(temp_dir, monkeypat
     rate_limited = httpx.HTTPStatusError(
         "rate limited", request=request, response=response
     )
-    upload = AsyncMock(side_effect=[rate_limited, rate_limited, None])
+    upload = AsyncMock(side_effect=rate_limited)
 
-    with patch("harbor_islo.environment.async_upload_file", upload):
+    with (
+        patch("harbor_islo.environment.async_upload_file", upload),
+        pytest.raises(httpx.HTTPStatusError),
+    ):
         await env._sdk_upload_file("/local/run.npz", "/verifier/run.npz")
 
-    assert upload.await_count == 3
+    assert upload.await_count == 1
 
 
 @pytest.mark.asyncio
-async def test_sdk_upload_file_retries_read_error(temp_dir, monkeypatch):
+async def test_sdk_upload_file_leaves_transport_retries_to_sdk(temp_dir, monkeypatch):
     env = _make_env(temp_dir, monkeypatch)
     env._sandbox_name = _SERVER_NAME
     _stub_islo(env)
-    upload = AsyncMock(side_effect=[httpx.ReadError("connection closed"), None])
+    upload = AsyncMock(side_effect=httpx.ReadError("connection closed"))
 
-    with patch("harbor_islo.environment.async_upload_file", upload):
+    with (
+        patch("harbor_islo.environment.async_upload_file", upload),
+        pytest.raises(httpx.ReadError),
+    ):
         await env._sdk_upload_file("/local/output.json", "/verifier/output.json")
 
-    assert upload.await_count == 2
+    assert upload.await_count == 1
 
 
 def _make_env(temp_dir, monkeypatch, **kwargs):
