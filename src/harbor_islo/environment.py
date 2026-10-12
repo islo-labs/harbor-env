@@ -8,6 +8,7 @@ Supports four modes:
 """
 
 import asyncio
+import math
 import os
 import re
 import shlex
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import uuid4
 
+import httpx
 from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
 from harbor.environments.docker import (
@@ -26,6 +28,7 @@ from harbor.environments.docker import (
 from harbor.models.trial.paths import EnvironmentPaths
 from harbor.utils.env import resolve_env_vars
 from islo import AsyncIslo
+from islo.custom import files as islo_files
 from islo.custom.exec import exec_and_wait
 from islo.custom.files import (
     async_download_dir,
@@ -36,6 +39,7 @@ from islo.custom.files import (
 from pydantic import BaseModel
 from tenacity import (
     retry,
+    retry_if_exception,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
@@ -96,6 +100,28 @@ _COMPOSE_CA_OVERLAY_NAME = "docker-compose-islo-ca.yaml"
 _COMPOSE_UP_TIMEOUT_SEC = 120
 _COMPOSE_DOWN_TIMEOUT_SEC = 30
 _COMPOSE_MAIN_TIMEOUT_SEC = 60
+
+
+def _retry_upload_error(exc: BaseException) -> bool:
+    return isinstance(exc, httpx.TransportError) or (
+        isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429
+    )
+
+
+_UPLOAD_BACKOFF = wait_exponential(multiplier=1, min=1, max=30)
+
+
+def _upload_retry_wait(retry_state: Any) -> float:
+    exc = retry_state.outcome.exception()
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
+        retry_after = exc.response.headers.get("Retry-After")
+        try:
+            delay = float(retry_after) if retry_after is not None else 0
+        except ValueError:
+            delay = 0
+        if math.isfinite(delay) and delay > 0:
+            return delay
+    return _UPLOAD_BACKOFF(retry_state)
 
 
 class IsloEnvironment(BaseEnvironment):
@@ -233,12 +259,19 @@ class IsloEnvironment(BaseEnvironment):
         gateway_profile: str | None = None,
     ) -> None:
         client = self._client()
+        # The gateway proxy and core are part of platform init. Only Docker
+        # needs an explicit capability with the current SDK's intent API.
+        init = (
+            {"type": "custom", "capabilities": ["docker"]}
+            if init_capabilities and "docker" in init_capabilities
+            else {"type": "minimal"}
+        )
         sandbox = await client.sandboxes.create_sandbox(
             image=image,
             vcpus=self.task_env_config.cpus,
             memory_mb=self.task_env_config.memory_mb,
             disk_gb=self.task_env_config.storage_mb // 1024,
-            init_capabilities=init_capabilities,
+            init=init,
             gateway_profile=gateway_profile,
         )
         self._sandbox_name = sandbox.name
@@ -373,7 +406,7 @@ class IsloEnvironment(BaseEnvironment):
             await self._client().gateway_profiles.delete_gateway_profile(
                 self._ephemeral_profile_id
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort cleanup
             self.logger.warning(f"Failed to delete ephemeral gateway profile: {exc}")
         finally:
             self._ephemeral_profile_id = None
@@ -629,7 +662,7 @@ class IsloEnvironment(BaseEnvironment):
             )
             try:
                 await self._delete_sandbox(self._sandbox_name)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - previous sandbox cleanup
                 self.logger.warning(f"Failed to delete previous sandbox: {exc}")
             await self._cleanup_gateway()
             self._sandbox_name = None
@@ -705,7 +738,7 @@ class IsloEnvironment(BaseEnvironment):
                         ["down", "--remove-orphans"],
                         timeout_sec=_COMPOSE_DOWN_TIMEOUT_SEC,
                     )
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - best-effort cleanup
                     self.logger.warning(f"docker compose down failed: {exc}")
             elif self._docker_container:
                 try:
@@ -714,13 +747,13 @@ class IsloEnvironment(BaseEnvironment):
                         cwd="/",
                         timeout_sec=_DOCKER_STOP_TIMEOUT_SEC,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001 - best-effort cleanup
+                    self.logger.warning(f"Failed to stop Docker container: {exc}")
                 self._docker_container = None
 
             await self._delete_sandbox(self._sandbox_name)
             self.logger.debug(f"Destroyed Islo sandbox: {self._sandbox_name}")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort cleanup
             self.logger.warning(f"Failed to destroy sandbox: {exc}")
         finally:
             await self._cleanup_gateway()
@@ -891,13 +924,24 @@ class IsloEnvironment(BaseEnvironment):
                 f"{(result.stderr or result.stdout or '')[-500:]}"
             )
 
-    @retry(
-        stop=stop_after_attempt(2),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        reraise=True,
-    )
     async def _sdk_upload_file(self, source_path: Path | str, target_path: str) -> None:
         assert self._sandbox_name is not None, "sandbox not started"
+        if not getattr(islo_files, "ASYNC_UPLOAD_FILE_RETRY_ATTEMPTS", 0):
+            await self._sdk_upload_file_legacy(source_path, target_path)
+            return
+        await async_upload_file(
+            self._client(), self._sandbox_name, source_path, target_path
+        )
+
+    @retry(
+        retry=retry_if_exception(_retry_upload_error),
+        stop=stop_after_attempt(6),
+        wait=_upload_retry_wait,
+        reraise=True,
+    )
+    async def _sdk_upload_file_legacy(
+        self, source_path: Path | str, target_path: str
+    ) -> None:
         await async_upload_file(
             self._client(), self._sandbox_name, source_path, target_path
         )

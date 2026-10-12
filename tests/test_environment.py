@@ -3,13 +3,105 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import EnvironmentPaths, TrialPaths
+from islo.custom import files as islo_files
 
 from harbor_islo import IsloEnvironment
+from harbor_islo.environment import _upload_retry_wait
 
 _SERVER_NAME = "bright-otter-runs"
+
+
+def test_legacy_upload_retry_wait_uses_retry_after():
+    request = httpx.Request("POST", "https://compute.example/sandboxes/test/files")
+    response = httpx.Response(429, headers={"Retry-After": "23"}, request=request)
+    error = httpx.HTTPStatusError("rate limited", request=request, response=response)
+    state = SimpleNamespace(outcome=SimpleNamespace(exception=lambda: error))
+    assert _upload_retry_wait(state) == 23
+
+
+@pytest.mark.asyncio
+async def test_sdk_upload_file_does_not_retry_bad_request(temp_dir, monkeypatch):
+    env = _make_env(temp_dir, monkeypatch)
+    env._sandbox_name = _SERVER_NAME
+    _stub_islo(env)
+    request = httpx.Request("POST", "https://compute.example/sandboxes/test/files")
+    response = httpx.Response(400, request=request)
+    error = httpx.HTTPStatusError("bad request", request=request, response=response)
+    upload = AsyncMock(side_effect=error)
+
+    with (
+        patch("harbor_islo.environment.async_upload_file", upload),
+        pytest.raises(httpx.HTTPStatusError),
+    ):
+        await env._sdk_upload_file("/local/run.npz", "/verifier/run.npz")
+
+    assert upload.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_sdk_upload_file_leaves_429_retries_to_sdk(temp_dir, monkeypatch):
+    monkeypatch.setattr(
+        islo_files, "ASYNC_UPLOAD_FILE_RETRY_ATTEMPTS", 6, raising=False
+    )
+    env = _make_env(temp_dir, monkeypatch)
+    env._sandbox_name = _SERVER_NAME
+    _stub_islo(env)
+    request = httpx.Request("POST", "https://compute.example/sandboxes/test/files")
+    response = httpx.Response(429, headers={"Retry-After": "0"}, request=request)
+    rate_limited = httpx.HTTPStatusError(
+        "rate limited", request=request, response=response
+    )
+    upload = AsyncMock(side_effect=rate_limited)
+
+    with (
+        patch("harbor_islo.environment.async_upload_file", upload),
+        pytest.raises(httpx.HTTPStatusError),
+    ):
+        await env._sdk_upload_file("/local/run.npz", "/verifier/run.npz")
+
+    assert upload.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_sdk_upload_file_leaves_transport_retries_to_sdk(temp_dir, monkeypatch):
+    monkeypatch.setattr(
+        islo_files, "ASYNC_UPLOAD_FILE_RETRY_ATTEMPTS", 6, raising=False
+    )
+    env = _make_env(temp_dir, monkeypatch)
+    env._sandbox_name = _SERVER_NAME
+    _stub_islo(env)
+    upload = AsyncMock(side_effect=httpx.ReadError("connection closed"))
+
+    with (
+        patch("harbor_islo.environment.async_upload_file", upload),
+        pytest.raises(httpx.ReadError),
+    ):
+        await env._sdk_upload_file("/local/output.json", "/verifier/output.json")
+
+    assert upload.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_sdk_upload_file_retries_with_older_sdk(temp_dir, monkeypatch):
+    monkeypatch.delattr(islo_files, "ASYNC_UPLOAD_FILE_RETRY_ATTEMPTS", raising=False)
+    env = _make_env(temp_dir, monkeypatch)
+    env._sandbox_name = _SERVER_NAME
+    _stub_islo(env)
+    request = httpx.Request("POST", "https://compute.example/sandboxes/test/files")
+    response = httpx.Response(429, headers={"Retry-After": "0"}, request=request)
+    rate_limited = httpx.HTTPStatusError(
+        "rate limited", request=request, response=response
+    )
+    upload = AsyncMock(side_effect=[rate_limited, rate_limited, None])
+
+    with patch("harbor_islo.environment.async_upload_file", upload):
+        await env._sdk_upload_file("/local/run.npz", "/verifier/run.npz")
+
+    assert upload.await_count == 3
 
 
 def _make_env(temp_dir, monkeypatch, **kwargs):
@@ -23,13 +115,13 @@ def _make_env(temp_dir, monkeypatch, **kwargs):
     trial_paths = TrialPaths(trial_dir=trial_dir)
     trial_paths.mkdir()
 
-    defaults = dict(
-        environment_dir=env_dir,
-        environment_name="test-task",
-        session_id="test-task__abc123",
-        trial_paths=trial_paths,
-        task_env_config=EnvironmentConfig(),
-    )
+    defaults = {
+        "environment_dir": env_dir,
+        "environment_name": "test-task",
+        "session_id": "test-task__abc123",
+        "trial_paths": trial_paths,
+        "task_env_config": EnvironmentConfig(),
+    }
     defaults.update(kwargs)
     return IsloEnvironment(**defaults)
 
@@ -80,6 +172,8 @@ async def test_start_plain_creates_sandbox_and_waits(temp_dir, monkeypatch):
     sandboxes.create_sandbox.assert_awaited_once()
     call_kwargs = sandboxes.create_sandbox.await_args.kwargs
     assert call_kwargs["image"] == "docker.io/library/islo-runner:latest"
+    assert call_kwargs["init"] == {"type": "minimal"}
+    assert "init_capabilities" not in call_kwargs
 
 
 @pytest.mark.asyncio
@@ -203,7 +297,7 @@ async def test_start_with_dockerfile_builds_and_runs_docker(temp_dir, monkeypatc
 
     call_kwargs = sandboxes.create_sandbox.await_args.kwargs
     assert call_kwargs["image"] == "docker.io/library/islo-runner:latest"
-    assert "docker" in call_kwargs["init_capabilities"]
+    assert call_kwargs["init"] == {"type": "custom", "capabilities": ["docker"]}
 
     env._build_and_run_docker.assert_awaited_once()
     assert env._workdir == "/code"
@@ -890,9 +984,11 @@ async def test_upload_file_two_hop_cleans_temp_on_failure(temp_dir, monkeypatch)
 
     env._sandbox_exec = AsyncMock(side_effect=_fake_exec)
 
-    with patch("harbor_islo.environment.async_upload_file", new_callable=AsyncMock):
-        with pytest.raises(RuntimeError, match="docker cp failed"):
-            await env.upload_file(source, "/installed-agent/x.txt")
+    with (
+        patch("harbor_islo.environment.async_upload_file", new_callable=AsyncMock),
+        pytest.raises(RuntimeError, match="docker cp failed"),
+    ):
+        await env.upload_file(source, "/installed-agent/x.txt")
 
     exec_calls = [c.args[0] for c in env._sandbox_exec.await_args_list]
     assert any("rm -f /tmp/harbor_" in c for c in exec_calls), (
@@ -1031,7 +1127,7 @@ async def test_ephemeral_gateway_profile_deleted_when_start_fails(
     sandboxes.create_sandbox.side_effect = RuntimeError("quota exceeded")
     gp = _stub_gateway_profiles(env)
 
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError, match="quota exceeded"):
         await env.start(force_build=False)
 
     # sandbox_name is None because create_sandbox failed; stop() must still clean up
@@ -1374,7 +1470,7 @@ class TestComposeExecRouting:
             await env.exec("echo hello")
 
         mock_main_exec.assert_awaited_once()
-        args, kwargs = mock_main_exec.await_args
+        args, _kwargs = mock_main_exec.await_args
         assert args[0] == "echo hello"
 
     @pytest.mark.asyncio
@@ -1575,9 +1671,11 @@ class TestComposeWriteCAOverlay:
         async def fake_sandbox_exec(command, cwd=None, env=None, timeout_sec=None):
             return SimpleNamespace(stdout="", stderr="permission denied", return_code=1)
 
-        with patch.object(env, "_sandbox_exec", new=fake_sandbox_exec):
-            with pytest.raises(RuntimeError, match="Failed to write CA overlay"):
-                await env._write_ca_overlay()
+        with (
+            patch.object(env, "_sandbox_exec", new=fake_sandbox_exec),
+            pytest.raises(RuntimeError, match="Failed to write CA overlay"),
+        ):
+            await env._write_ca_overlay()
 
 
 class TestComposeWaitForMainContainer:
@@ -1607,9 +1705,9 @@ class TestComposeWaitForMainContainer:
         with (
             patch.object(env, "_compose_exec", new=fake_compose_exec),
             patch("harbor_islo.environment.asyncio.sleep", new=fast_sleep),
+            pytest.raises(RuntimeError, match="Main container not running"),
         ):
-            with pytest.raises(RuntimeError, match="Main container not running"):
-                await env._wait_for_main_container(timeout_sec=4)
+            await env._wait_for_main_container(timeout_sec=4)
 
 
 class TestComposeAttach:

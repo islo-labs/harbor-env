@@ -6,4 +6,4 @@ from harbor_islo.environment import (
     IsloEnvironment,
 )
 
-__all__ = ["IsloEnvironment", "GatewayConfig", "GatewayRuleConfig"]
+__all__ = ["GatewayConfig", "GatewayRuleConfig", "IsloEnvironment"]
