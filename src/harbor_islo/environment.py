@@ -398,7 +398,7 @@ class IsloEnvironment(BaseEnvironment):
             await self._client().gateway_profiles.delete_gateway_profile(
                 self._ephemeral_profile_id
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort cleanup
             self.logger.warning(f"Failed to delete ephemeral gateway profile: {exc}")
         finally:
             self._ephemeral_profile_id = None
@@ -654,7 +654,7 @@ class IsloEnvironment(BaseEnvironment):
             )
             try:
                 await self._delete_sandbox(self._sandbox_name)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - previous sandbox cleanup
                 self.logger.warning(f"Failed to delete previous sandbox: {exc}")
             await self._cleanup_gateway()
             self._sandbox_name = None
@@ -730,7 +730,7 @@ class IsloEnvironment(BaseEnvironment):
                         ["down", "--remove-orphans"],
                         timeout_sec=_COMPOSE_DOWN_TIMEOUT_SEC,
                     )
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - best-effort cleanup
                     self.logger.warning(f"docker compose down failed: {exc}")
             elif self._docker_container:
                 try:
@@ -739,13 +739,13 @@ class IsloEnvironment(BaseEnvironment):
                         cwd="/",
                         timeout_sec=_DOCKER_STOP_TIMEOUT_SEC,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001 - best-effort cleanup
+                    self.logger.warning(f"Failed to stop Docker container: {exc}")
                 self._docker_container = None
 
             await self._delete_sandbox(self._sandbox_name)
             self.logger.debug(f"Destroyed Islo sandbox: {self._sandbox_name}")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort cleanup
             self.logger.warning(f"Failed to destroy sandbox: {exc}")
         finally:
             await self._cleanup_gateway()

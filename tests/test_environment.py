@@ -83,13 +83,13 @@ def _make_env(temp_dir, monkeypatch, **kwargs):
     trial_paths = TrialPaths(trial_dir=trial_dir)
     trial_paths.mkdir()
 
-    defaults = dict(
-        environment_dir=env_dir,
-        environment_name="test-task",
-        session_id="test-task__abc123",
-        trial_paths=trial_paths,
-        task_env_config=EnvironmentConfig(),
-    )
+    defaults = {
+        "environment_dir": env_dir,
+        "environment_name": "test-task",
+        "session_id": "test-task__abc123",
+        "trial_paths": trial_paths,
+        "task_env_config": EnvironmentConfig(),
+    }
     defaults.update(kwargs)
     return IsloEnvironment(**defaults)
 
@@ -950,9 +950,11 @@ async def test_upload_file_two_hop_cleans_temp_on_failure(temp_dir, monkeypatch)
 
     env._sandbox_exec = AsyncMock(side_effect=_fake_exec)
 
-    with patch("harbor_islo.environment.async_upload_file", new_callable=AsyncMock):
-        with pytest.raises(RuntimeError, match="docker cp failed"):
-            await env.upload_file(source, "/installed-agent/x.txt")
+    with (
+        patch("harbor_islo.environment.async_upload_file", new_callable=AsyncMock),
+        pytest.raises(RuntimeError, match="docker cp failed"),
+    ):
+        await env.upload_file(source, "/installed-agent/x.txt")
 
     exec_calls = [c.args[0] for c in env._sandbox_exec.await_args_list]
     assert any("rm -f /tmp/harbor_" in c for c in exec_calls), (
@@ -1091,7 +1093,7 @@ async def test_ephemeral_gateway_profile_deleted_when_start_fails(
     sandboxes.create_sandbox.side_effect = RuntimeError("quota exceeded")
     gp = _stub_gateway_profiles(env)
 
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError, match="quota exceeded"):
         await env.start(force_build=False)
 
     # sandbox_name is None because create_sandbox failed; stop() must still clean up
@@ -1434,7 +1436,7 @@ class TestComposeExecRouting:
             await env.exec("echo hello")
 
         mock_main_exec.assert_awaited_once()
-        args, kwargs = mock_main_exec.await_args
+        args, _kwargs = mock_main_exec.await_args
         assert args[0] == "echo hello"
 
     @pytest.mark.asyncio
@@ -1635,9 +1637,11 @@ class TestComposeWriteCAOverlay:
         async def fake_sandbox_exec(command, cwd=None, env=None, timeout_sec=None):
             return SimpleNamespace(stdout="", stderr="permission denied", return_code=1)
 
-        with patch.object(env, "_sandbox_exec", new=fake_sandbox_exec):
-            with pytest.raises(RuntimeError, match="Failed to write CA overlay"):
-                await env._write_ca_overlay()
+        with (
+            patch.object(env, "_sandbox_exec", new=fake_sandbox_exec),
+            pytest.raises(RuntimeError, match="Failed to write CA overlay"),
+        ):
+            await env._write_ca_overlay()
 
 
 class TestComposeWaitForMainContainer:
@@ -1667,9 +1671,9 @@ class TestComposeWaitForMainContainer:
         with (
             patch.object(env, "_compose_exec", new=fake_compose_exec),
             patch("harbor_islo.environment.asyncio.sleep", new=fast_sleep),
+            pytest.raises(RuntimeError, match="Main container not running"),
         ):
-            with pytest.raises(RuntimeError, match="Main container not running"):
-                await env._wait_for_main_container(timeout_sec=4)
+            await env._wait_for_main_container(timeout_sec=4)
 
 
 class TestComposeAttach:
